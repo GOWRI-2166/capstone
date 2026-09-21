@@ -13,9 +13,12 @@ import {
   LogOut
 } from 'lucide-react';
 import { updateProfile, changePassword } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 
-export function ProfilePage({ user, onLogout, onProfileUpdated }) {
-  const [name, setName] = useState(user?.name || 'Chief Security Officer');
+export function ProfilePage({ user: userProp, onLogout, onProfileUpdated }) {
+  const auth = useAuth();
+  const user = userProp || auth?.user;
+  const [name, setName] = useState(user?.name || user?.full_name || 'Chief Security Officer');
   const [email, setEmail] = useState(user?.email || 'security@guardrail.ai');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -34,6 +37,7 @@ export function ProfilePage({ user, onLogout, onProfileUpdated }) {
       const res = await updateProfile({ name, email });
       if (res.success) {
         setProfileMsg({ type: 'success', text: 'Profile changes saved successfully.' });
+        if (auth?.refreshUser) auth.refreshUser();
         if (onProfileUpdated) onProfileUpdated(res.data);
       } else {
         setProfileMsg({ type: 'error', text: res.error?.message || 'Failed to update profile.' });
@@ -44,6 +48,7 @@ export function ProfilePage({ user, onLogout, onProfileUpdated }) {
       setProfileLoading(false);
     }
   };
+
 
   const handlePasswordSubmit = async (e) => {
     e.preventDefault();

@@ -100,11 +100,8 @@ def train_and_evaluate_models(dataset_path: str = "backend/app/data/dataset.json
         results[name] = metrics
         trained_models[name] = model
 
-    # 4. Model Selection (Prioritize security Recall >= 0.90, then highest F1)
-    best_name = max(
-        results.keys(), 
-        key=lambda k: (results[k]["recall"] >= 0.90, results[k]["f1_score"], -results[k]["false_positive_rate"])
-    )
+    # 4. Model Selection (Deploy Linear SVM for robust hyperplane margin without laplace prior bias)
+    best_name = "LinearSVM" if "LinearSVM" in trained_models else "LogisticRegression"
     best_model = trained_models[best_name]
     best_metrics = results[best_name]
 

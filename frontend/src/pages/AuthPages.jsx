@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { 
   Shield, 
   Lock, 
@@ -11,7 +12,7 @@ import {
   EyeOff,
   Sparkles
 } from 'lucide-react';
-import { loginUser, registerUser, setAuthSession } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 
 export function LoginPage({ onLoginSuccess, onSwitchToRegister }) {
   const [email, setEmail] = useState('security@guardrail.ai');
@@ -20,17 +21,25 @@ export function LoginPage({ onLoginSuccess, onSwitchToRegister }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
+  const auth = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError(null);
     setLoading(true);
     try {
-      const res = await loginUser(email, password);
-      if (res.success && res.data?.token) {
-        setAuthSession(res.data.token, res.data.user);
-        onLoginSuccess(res.data.user);
+      const res = await auth.login(email, password);
+      if (res.success) {
+        if (onLoginSuccess) {
+          onLoginSuccess(res.user);
+        } else {
+          const destination = location.state?.from?.pathname || '/agents';
+          navigate(destination, { replace: true });
+        }
       } else {
-        setError(res.error?.message || 'Invalid email or password');
+        setError(res.error || 'Invalid email or password');
       }
     } catch (err) {
       setError('Unable to connect to security server. Please ensure backend is running.');
@@ -121,9 +130,15 @@ export function LoginPage({ onLoginSuccess, onSwitchToRegister }) {
 
         <div className="auth-footer">
           <span>Need an account? </span>
-          <button type="button" className="link-button" onClick={onSwitchToRegister}>
-            Register Security Administrator
-          </button>
+          {onSwitchToRegister ? (
+            <button type="button" className="link-button" onClick={onSwitchToRegister}>
+              Register Security Administrator
+            </button>
+          ) : (
+            <Link to="/register" className="link-button">
+              Register Security Administrator
+            </Link>
+          )}
         </div>
       </div>
     </div>
@@ -137,6 +152,9 @@ export function RegisterPage({ onRegisterSuccess, onSwitchToLogin }) {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  const auth = useAuth();
+  const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -152,12 +170,15 @@ export function RegisterPage({ onRegisterSuccess, onSwitchToLogin }) {
 
     setLoading(true);
     try {
-      const res = await registerUser(name, email, password, confirmPassword);
-      if (res.success && res.data?.token) {
-        setAuthSession(res.data.token, res.data.user);
-        onRegisterSuccess(res.data.user);
+      const res = await auth.register(name, email, password, confirmPassword);
+      if (res.success) {
+        if (onRegisterSuccess) {
+          onRegisterSuccess(res.user);
+        } else {
+          navigate('/agents', { replace: true });
+        }
       } else {
-        setError(res.error?.message || 'Registration failed');
+        setError(res.error || 'Registration failed');
       }
     } catch {
       setError('Unable to connect to security server. Please check backend.');
@@ -251,11 +272,18 @@ export function RegisterPage({ onRegisterSuccess, onSwitchToLogin }) {
 
         <div className="auth-footer">
           <span>Already have an account? </span>
-          <button type="button" className="link-button" onClick={onSwitchToLogin}>
-            Sign In
-          </button>
+          {onSwitchToLogin ? (
+            <button type="button" className="link-button" onClick={onSwitchToLogin}>
+              Sign In
+            </button>
+          ) : (
+            <Link to="/login" className="link-button">
+              Sign In
+            </Link>
+          )}
         </div>
       </div>
     </div>
   );
 }
+

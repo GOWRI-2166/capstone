@@ -18,6 +18,11 @@ def ensure_schema_migrations():
         Base.metadata.create_all(bind=engine)
 
         with engine.connect() as conn:
+            # Check users columns
+            user_cols = [r[1] for r in conn.exec_driver_sql("PRAGMA table_info(users);").fetchall()]
+            if user_cols and "is_active" not in user_cols:
+                conn.exec_driver_sql("ALTER TABLE users ADD COLUMN is_active BOOLEAN DEFAULT 1;")
+
             # Check guardrail_audit_logs columns
             cols = [r[1] for r in conn.exec_driver_sql("PRAGMA table_info(guardrail_audit_logs);").fetchall()]
             if cols:
@@ -33,6 +38,8 @@ def ensure_schema_migrations():
                     conn.exec_driver_sql("ALTER TABLE guardrail_audit_logs ADD COLUMN action_taken VARCHAR(32) DEFAULT 'ALLOWED';")
                 if "user_id" not in cols:
                     conn.exec_driver_sql("ALTER TABLE guardrail_audit_logs ADD COLUMN user_id VARCHAR(64);")
+                if "conversation_id" not in cols:
+                    conn.exec_driver_sql("ALTER TABLE guardrail_audit_logs ADD COLUMN conversation_id VARCHAR(64);")
 
             # Check security_alerts columns
             cols = [r[1] for r in conn.exec_driver_sql("PRAGMA table_info(security_alerts);").fetchall()]
@@ -57,6 +64,12 @@ def ensure_schema_migrations():
                     conn.exec_driver_sql("ALTER TABLE agents ADD COLUMN integration_method VARCHAR(32) DEFAULT 'API';")
                 if "protection_mode" not in cols:
                     conn.exec_driver_sql("ALTER TABLE agents ADD COLUMN protection_mode VARCHAR(32) DEFAULT 'AUTOMATIC_BLOCK';")
+                if "slug" not in cols:
+                    conn.exec_driver_sql("ALTER TABLE agents ADD COLUMN slug VARCHAR(64);")
+                if "category" not in cols:
+                    conn.exec_driver_sql("ALTER TABLE agents ADD COLUMN category VARCHAR(64) DEFAULT 'General AI';")
+                if "enabled" not in cols:
+                    conn.exec_driver_sql("ALTER TABLE agents ADD COLUMN enabled BOOLEAN DEFAULT 1;")
             conn.commit()
     except Exception as e:
         print(f"Notice: schema migration skipped or already applied: {e}")

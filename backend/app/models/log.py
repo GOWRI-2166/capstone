@@ -13,18 +13,32 @@ class User(Base):
     email = Column(String(128), unique=True, index=True, nullable=False)
     password_hash = Column(String(256), nullable=False)
     role = Column(String(32), default="Security Administrator")
+    is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    conversations = relationship("Conversation", back_populates="user", cascade="all, delete-orphan")
+
+    @property
+    def full_name(self) -> str:
+        return self.name
+
+    @property
+    def hashed_password(self) -> str:
+        return self.password_hash
 
 class Agent(Base):
     """Registered Protected AI Agents."""
     __tablename__ = "agents"
 
     id = Column(String(64), primary_key=True, index=True)
+    slug = Column(String(64), nullable=True, index=True)
     user_id = Column(String(64), ForeignKey("users.id"), nullable=True, index=True)
     name = Column(String(128), nullable=False)
     icon = Column(String(16), default="🤖")
+    category = Column(String(64), default="General AI")
     status = Column(String(32), default="Protected")  # Protected, Standby, Disconnected
+    enabled = Column(Boolean, default=True)
     integration_method = Column(String(32), default="API")  # API, Python SDK, REST API
     request_count = Column(Integer, default=0)
     threat_count = Column(Integer, default=0)
@@ -35,6 +49,41 @@ class Agent(Base):
     protection_mode = Column(String(32), default="AUTOMATIC_BLOCK")  # AUTOMATIC_BLOCK, WARN_ONLY
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     last_activity = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    conversations = relationship("Conversation", back_populates="agent", cascade="all, delete-orphan")
+
+class Conversation(Base):
+    """Interactive Chat Session with a specific protected AI Agent."""
+    __tablename__ = "conversations"
+
+    id = Column(String(64), primary_key=True, index=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String(64), ForeignKey("users.id"), nullable=False, index=True)
+    agent_id = Column(String(64), ForeignKey("agents.id"), nullable=False, index=True)
+    title = Column(String(256), default="New Security Guarded Chat")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    user = relationship("User", back_populates="conversations")
+    agent = relationship("Agent", back_populates="conversations")
+    messages = relationship("Message", back_populates="conversation", cascade="all, delete-orphan", order_by="Message.created_at.asc()")
+
+class Message(Base):
+    """Individual user prompt or AI response with attached Guardrail analysis."""
+    __tablename__ = "messages"
+
+    id = Column(String(64), primary_key=True, index=True, default=lambda: str(uuid.uuid4()))
+    conversation_id = Column(String(64), ForeignKey("conversations.id"), nullable=False, index=True)
+    sender = Column(String(32), nullable=False)  # 'user', 'assistant', 'system'
+    content = Column(Text, nullable=False)
+    risk_score = Column(Float, default=0.0)
+    risk_level = Column(String(16), default="LOW")  # LOW, MEDIUM, HIGH, CRITICAL
+    decision = Column(String(16), default="ALLOW")  # ALLOW, WARN, BLOCK
+    detection_reason = Column(Text, nullable=True)
+    triggered_rules = Column(JSON, default=list)
+    ml_score = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+    conversation = relationship("Conversation", back_populates="messages")
 
 class ApiKey(Base):
     """API Keys for agent integration and authentication."""
@@ -57,6 +106,7 @@ class GuardrailAuditLog(Base):
     id = Column(String(64), primary_key=True, index=True)
     agent_id = Column(String(64), index=True, nullable=False)
     user_id = Column(String(64), nullable=True, index=True)
+    conversation_id = Column(String(64), nullable=True, index=True)
     website_url = Column(String(256), nullable=True)
     source_domain = Column(String(128), nullable=True, index=True)
     resource_type = Column(String(64), default="user_input")  # user_input, webpage_dom, api_response, tool_output

@@ -39,16 +39,26 @@ class MultinomialNaiveBayesClassifier:
     def predict_proba(self, X: List[Dict[int, float]]) -> List[float]:
         probs: List[float] = []
         for vec in X:
-            log_p0 = self.log_priors[0]
-            log_p1 = self.log_priors[1]
+            if not vec:
+                probs.append(0.05)
+                continue
 
+            log_p0 = self.log_priors.get(0, -0.693)
+            log_p1 = self.log_priors.get(1, -0.693)
+
+            matched_count = 0
             for idx, val in vec.items():
-                if idx in self.feature_log_probs[0]:
-                    log_p0 += val * self.feature_log_probs[0][idx]
-                if idx in self.feature_log_probs[1]:
-                    log_p1 += val * self.feature_log_probs[1][idx]
+                p0 = self.feature_log_probs[0].get(idx)
+                p1 = self.feature_log_probs[1].get(idx)
+                if p0 is not None and p1 is not None:
+                    log_p0 += val * p0
+                    log_p1 += val * p1
+                    matched_count += 1
 
-            # Softmax / log-sum-exp normalization
+            if matched_count == 0:
+                probs.append(0.05)
+                continue
+
             max_log = max(log_p0, log_p1)
             exp0 = math.exp(log_p0 - max_log)
             exp1 = math.exp(log_p1 - max_log)
@@ -107,13 +117,10 @@ class LogisticRegressionClassifier:
                 vec = X[idx]
                 target = y[idx]
 
-                # Dot product
                 score = self.bias + sum(self.weights[feat_idx] * val for feat_idx, val in vec.items())
-                # Sigmoid
                 pred = 1.0 / (1.0 + math.exp(-max(-20.0, min(20.0, score))))
                 error = pred - target
 
-                # Gradient update with L2
                 for feat_idx, val in vec.items():
                     grad = error * val + self.l2_reg * self.weights[feat_idx]
                     self.weights[feat_idx] -= self.lr * grad
@@ -124,6 +131,9 @@ class LogisticRegressionClassifier:
     def predict_proba(self, X: List[Dict[int, float]]) -> List[float]:
         probs: List[float] = []
         for vec in X:
+            if not vec:
+                probs.append(0.05)
+                continue
             score = self.bias + sum(self.weights.get(feat_idx, 0.0) * val for feat_idx, val in vec.items())
             prob = 1.0 / (1.0 + math.exp(-max(-20.0, min(20.0, score))))
             probs.append(round(prob, 4))
@@ -158,13 +168,12 @@ class LinearSVMClassifier:
         self.lambda_param = lambda_param
         self.iterations = iterations
         self.weights: Dict[int, float] = {}
-        self.bias: float = 0.0
+        self.bias: float = -0.1
 
     def fit(self, X: List[Dict[int, float]], y: List[int], n_features: int) -> 'LinearSVMClassifier':
         self.weights = {i: 0.0 for i in range(n_features)}
-        self.bias = 0.0
+        self.bias = -0.1
         n_samples = len(y)
-        # Convert {0, 1} -> {-1, 1}
         y_svm = [1 if label == 1 else -1 for label in y]
 
         rng = random.Random(42)
@@ -185,12 +194,23 @@ class LinearSVMClassifier:
 
         return self
 
+    def decision_function(self, X: List[Dict[int, float]]) -> List[float]:
+        scores: List[float] = []
+        for vec in X:
+            if not vec:
+                scores.append(-1.0)
+                continue
+            s = self.bias + sum(self.weights.get(feat_idx, 0.0) * val for feat_idx, val in vec.items())
+            scores.append(round(s, 4))
+        return scores
+
     def predict_proba(self, X: List[Dict[int, float]]) -> List[float]:
-        # Platt-scaled sigmoid
         probs: List[float] = []
         for vec in X:
+            if not vec:
+                probs.append(0.04)
+                continue
             score = self.bias + sum(self.weights.get(feat_idx, 0.0) * val for feat_idx, val in vec.items())
-            # Scale margin to [0, 1] probability
             p = 1.0 / (1.0 + math.exp(-max(-15.0, min(15.0, score * 2.5))))
             probs.append(round(p, 4))
         return probs
@@ -229,14 +249,10 @@ class RandomForestClassifier:
         rng = random.Random(42)
 
         for tree_idx in range(self.n_estimators):
-            # Bootstrap sampling with random feature subspace
             sampled_indices = [rng.randint(0, n_samples - 1) for _ in range(n_samples)]
             subspace = rng.sample(range(n_features), min(self.max_features_per_tree, n_features))
 
-            # Train linear decision stump on subspace
             best_feat = subspace[0]
-            best_score = -1.0
-            
             feat_scores: Dict[int, float] = {}
             for f in subspace:
                 mal_sum = sum(X[i].get(f, 0.0) for i in sampled_indices if y[i] == 1)
@@ -251,6 +267,9 @@ class RandomForestClassifier:
     def predict_proba(self, X: List[Dict[int, float]]) -> List[float]:
         probs: List[float] = []
         for vec in X:
+            if not vec:
+                probs.append(0.05)
+                continue
             votes = 0.0
             for tree in self.trees:
                 score = sum(vec.get(f, 0.0) * tree["feat_scores"].get(f, 0.0) for f in tree["subspace"])

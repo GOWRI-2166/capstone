@@ -7,8 +7,17 @@ class PureTfidfVectorizer:
     Pure-Python TF-IDF N-gram Feature Extractor.
     
     Extracts unigrams, bigrams, and trigrams without requiring external native C-extensions.
+    Filters isolated common functional stop words while preserving security-relevant n-grams.
     Fully serializable to JSON for cross-platform deployment.
     """
+
+    STOP_WORDS = {
+        "a", "an", "the", "in", "on", "of", "to", "for", "with", "at", "by", "from",
+        "up", "about", "into", "over", "after", "is", "are", "was", "were", "be",
+        "been", "being", "have", "has", "had", "do", "does", "did", "and", "or",
+        "but", "if", "while", "it", "this", "that", "these", "those", "my", "your",
+        "his", "her", "its", "our", "their", "me", "him", "them", "us", "following"
+    }
 
     def __init__(self, min_ngram: int = 1, max_ngram: int = 3, max_features: int = 2500):
         self.min_ngram = min_ngram
@@ -19,8 +28,9 @@ class PureTfidfVectorizer:
         self.total_docs: int = 0
 
     def _tokenize(self, text: str) -> List[str]:
-        # Tokenize words, numbers, and special symbols
-        words = re.findall(r"\b\w+\b|[!#\$%&\*\+/:;<=>\?@\[\\\]\^_`\{\|\}~]", text.lower())
+        words = re.findall(r"\b[a-zA-Z0-9_-]{2,}\b|<!--|-->|<[^>]+>|![^\]]*\]\([^)]+\)", text.lower())
+        if not words:
+            words = re.findall(r"\b\w+\b", text.lower())
         return words
 
     def _extract_ngrams(self, tokens: List[str]) -> List[str]:
@@ -28,7 +38,10 @@ class PureTfidfVectorizer:
         n_tokens = len(tokens)
         for n in range(self.min_ngram, self.max_ngram + 1):
             for i in range(n_tokens - n + 1):
-                ngrams.append(" ".join(tokens[i:i + n]))
+                gram = " ".join(tokens[i:i + n])
+                if n == 1 and gram in self.STOP_WORDS:
+                    continue
+                ngrams.append(gram)
         return ngrams
 
     def fit(self, texts: List[str]) -> 'PureTfidfVectorizer':
@@ -63,7 +76,6 @@ class PureTfidfVectorizer:
                 vectors.append({})
                 continue
 
-            # Term frequency
             tf_counts: Dict[str, int] = {}
             for ng in ngrams:
                 if ng in self.vocabulary:

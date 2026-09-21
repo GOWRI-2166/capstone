@@ -1,8 +1,15 @@
 import React, { useState, useEffect } from 'react';
+import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { ProtectedRoute } from './components/Common/ProtectedRoute';
 import { Sidebar } from './components/Layout/Sidebar';
 import { Header } from './components/Layout/Header';
 
-// 8 Dedicated Pages Requested by User
+// Pages
+import { LandingPage } from './pages/LandingPage';
+import { LoginPage, RegisterPage } from './pages/AuthPages';
+import { AgentSelectionPage } from './pages/AgentSelectionPage';
+import { ChatWorkspacePage } from './pages/ChatWorkspacePage';
 import { DashboardPage } from './pages/DashboardPage';
 import { MyAgentsPage } from './pages/MyAgentsPage';
 import { ConnectAgentPage } from './pages/ConnectAgentPage';
@@ -11,20 +18,24 @@ import { ThreatsPage } from './pages/ThreatsPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { ProfilePage } from './pages/ProfilePage';
 
 import { fetchHealth, fetchDashboardStats, fetchAgents } from './services/api';
 import { ShieldAlert, CheckCircle, X } from 'lucide-react';
 
-export function App() {
-  const [currentTab, setCurrentTab] = useState('dashboard');
+/**
+ * Standard Security Operations Layout Wrapper
+ */
+function ConsoleLayout({ currentTab, children, initialSelectedThreat, onClearInitialThreat, onSelectThreat }) {
   const [serverOnline, setServerOnline] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [stats, setStats] = useState(null);
   const [agents, setAgents] = useState([]);
-  const [initialSelectedThreat, setInitialSelectedThreat] = useState(null);
   const [toast, setToast] = useState(null);
+  
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
 
-  // Load telemetry data from backend
   const loadPlatformData = async () => {
     try {
       const [h, s, a] = await Promise.all([
@@ -35,14 +46,14 @@ export function App() {
       setServerOnline(h.status === 'ok');
       setStats(s);
       setAgents(a || []);
-    } catch (err) {
+    } catch {
       setServerOnline(false);
     }
   };
 
   useEffect(() => {
     loadPlatformData();
-    const interval = setInterval(loadPlatformData, 7000);
+    const interval = setInterval(loadPlatformData, 8000);
     return () => clearInterval(interval);
   }, []);
 
@@ -57,17 +68,12 @@ export function App() {
     const isBlocked = eventResult.decision === 'BLOCK';
     setToast({
       type: isBlocked ? 'danger' : 'success',
-      title: isBlocked ? 'Security Threat Blocked!' : 'Safe Agent Event Cleared',
+      title: isBlocked ? 'Security Threat Intercepted & Blocked!' : 'Clean Agent Event Verified',
       message: isBlocked 
         ? `Neutralized ${eventResult.attack_type || 'Malicious Payload'} from ${eventResult.url || 'external source'}.`
         : `Verified clean traffic from ${eventResult.url || 'external resource'}.`
     });
     setTimeout(() => setToast(null), 5000);
-  };
-
-  const handleSelectThreatFromDashboard = (threat) => {
-    setInitialSelectedThreat(threat);
-    setCurrentTab('threats');
   };
 
   const getPageMeta = () => {
@@ -79,8 +85,8 @@ export function App() {
         };
       case 'agents':
         return {
-          title: 'My Protected Agents',
-          subtitle: 'Manage connected autonomous AI agents, monitoring status, and protection boundaries'
+          title: 'Choose Protected AI Agent',
+          subtitle: 'Select an autonomous assistant with end-to-end Input & Output Guardrail protection'
         };
       case 'connect':
         return {
@@ -112,6 +118,11 @@ export function App() {
           title: 'Guardrail Policies & Security Settings',
           subtitle: 'Configure active scanning engines, enforcement mode (Automatic Block vs Warning), and risk thresholds'
         };
+      case 'profile':
+        return {
+          title: 'Administrator Profile & Security Keys',
+          subtitle: 'Manage your credentials, security preferences, and active guardrail administrator session'
+        };
       default:
         return { title: 'Universal AI Guardrail', subtitle: 'Cybersecurity Operations' };
     }
@@ -121,19 +132,15 @@ export function App() {
 
   return (
     <div className="app-container">
-      {/* Left Navigation Bar with exact 8 pages */}
       <Sidebar
         currentTab={currentTab}
-        onSelectTab={(tab) => {
-          setInitialSelectedThreat(null);
-          setCurrentTab(tab);
-        }}
         serverOnline={serverOnline}
         threatCount={stats?.blocked_threats_count || 0}
         agentCount={agents.length}
+        user={user}
+        onLogout={logout}
       />
 
-      {/* Main Content Layout */}
       <div className="main-layout">
         <Header 
           title={title} 
@@ -141,6 +148,13 @@ export function App() {
           onRefresh={handleManualRefresh}
           refreshing={refreshing}
           onEventSimulated={handleEventSimulated}
+          user={user}
+          onLogout={logout}
+          onNavigateToThreats={(alert) => {
+            if (alert && onSelectThreat) onSelectThreat(alert);
+            navigate('/threats');
+          }}
+          onNavigateToProfile={() => navigate('/profile')}
         />
 
         {/* Global Alert Toast */}
@@ -158,57 +172,170 @@ export function App() {
         )}
 
         <main>
-          {currentTab === 'dashboard' && (
-            <DashboardPage
-              stats={stats}
-              onNavigateToWebsiteActivity={() => setCurrentTab('website_activity')}
-              onNavigateToThreats={() => setCurrentTab('threats')}
-              onNavigateToAgents={() => setCurrentTab('agents')}
-              onSelectThreat={handleSelectThreatFromDashboard}
-            />
-          )}
-
-          {currentTab === 'agents' && (
-            <MyAgentsPage 
-              agents={agents}
-              onRefresh={loadPlatformData}
-              onNavigateToConnect={() => setCurrentTab('connect')}
-            />
-          )}
-
-          {currentTab === 'connect' && (
-            <ConnectAgentPage 
-              onEventSimulated={handleEventSimulated}
-            />
-          )}
-
-          {currentTab === 'website_activity' && (
-            <WebsiteActivityPage 
-              onSelectThreat={handleSelectThreatFromDashboard}
-            />
-          )}
-
-          {currentTab === 'threats' && (
-            <ThreatsPage 
-              initialSelectedThreat={initialSelectedThreat}
-              onClearInitialThreat={() => setInitialSelectedThreat(null)}
-            />
-          )}
-
-          {currentTab === 'history' && (
-            <HistoryPage />
-          )}
-
-          {currentTab === 'analytics' && (
-            <AnalyticsPage />
-          )}
-
-          {currentTab === 'settings' && (
-            <SettingsPage />
-          )}
+          {React.isValidElement(children) 
+            ? React.cloneElement(children, {
+                stats,
+                agents,
+                onRefresh: loadPlatformData,
+                onEventSimulated: handleEventSimulated,
+                initialSelectedThreat,
+                onClearInitialThreat,
+                onSelectThreat,
+                onNavigateToWebsiteActivity: () => navigate('/website-activity'),
+                onNavigateToThreats: (threat) => {
+                  if (threat && onSelectThreat) onSelectThreat(threat);
+                  navigate('/threats');
+                },
+                onNavigateToAgents: () => navigate('/agents'),
+                onNavigateToConnect: () => navigate('/connect')
+              })
+            : children
+          }
         </main>
       </div>
     </div>
+  );
+}
+
+export function App() {
+  const [selectedThreat, setSelectedThreat] = useState(null);
+
+  return (
+    <AuthProvider>
+      <Routes>
+        {/* Public Routes */}
+        <Route path="/" element={<LandingPage />} />
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/register" element={<RegisterPage />} />
+
+        {/* Protected AI Agent Selection & Interactive Chat Workspace */}
+        <Route 
+          path="/agents" 
+          element={
+            <ProtectedRoute>
+              <ConsoleLayout currentTab="agents">
+                <AgentSelectionPage />
+              </ConsoleLayout>
+            </ProtectedRoute>
+          } 
+        />
+
+        <Route 
+          path="/chat/:agentId" 
+          element={
+            <ProtectedRoute>
+              <ConsoleLayout currentTab="agents">
+                <ChatWorkspacePage />
+              </ConsoleLayout>
+            </ProtectedRoute>
+          } 
+        />
+
+        <Route path="/chat" element={<Navigate to="/agents" replace />} />
+
+        {/* Protected Security Operations Console Pages */}
+        <Route 
+          path="/dashboard" 
+          element={
+            <ProtectedRoute>
+              <ConsoleLayout 
+                currentTab="dashboard"
+                onSelectThreat={(t) => setSelectedThreat(t)}
+              >
+                <DashboardPage />
+              </ConsoleLayout>
+            </ProtectedRoute>
+          } 
+        />
+
+        <Route 
+          path="/threats" 
+          element={
+            <ProtectedRoute>
+              <ConsoleLayout 
+                currentTab="threats"
+                initialSelectedThreat={selectedThreat}
+                onClearInitialThreat={() => setSelectedThreat(null)}
+              >
+                <ThreatsPage />
+              </ConsoleLayout>
+            </ProtectedRoute>
+          } 
+        />
+
+        <Route 
+          path="/website-activity" 
+          element={
+            <ProtectedRoute>
+              <ConsoleLayout 
+                currentTab="website_activity"
+                onSelectThreat={(t) => setSelectedThreat(t)}
+              >
+                <WebsiteActivityPage />
+              </ConsoleLayout>
+            </ProtectedRoute>
+          } 
+        />
+
+        <Route 
+          path="/history" 
+          element={
+            <ProtectedRoute>
+              <ConsoleLayout currentTab="history">
+                <HistoryPage />
+              </ConsoleLayout>
+            </ProtectedRoute>
+          } 
+        />
+
+        <Route 
+          path="/analytics" 
+          element={
+            <ProtectedRoute>
+              <ConsoleLayout currentTab="analytics">
+                <AnalyticsPage />
+              </ConsoleLayout>
+            </ProtectedRoute>
+          } 
+        />
+
+        <Route 
+          path="/settings" 
+          element={
+            <ProtectedRoute>
+              <ConsoleLayout currentTab="settings">
+                <SettingsPage />
+              </ConsoleLayout>
+            </ProtectedRoute>
+          } 
+        />
+
+        <Route 
+          path="/connect" 
+          element={
+            <ProtectedRoute>
+              <ConsoleLayout currentTab="connect">
+                <ConnectAgentPage />
+              </ConsoleLayout>
+            </ProtectedRoute>
+          } 
+        />
+
+        <Route 
+          path="/profile" 
+          element={
+            <ProtectedRoute>
+              <ConsoleLayout currentTab="profile">
+                <ProfilePage />
+              </ConsoleLayout>
+            </ProtectedRoute>
+          } 
+        />
+
+        {/* Catch-all route */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </AuthProvider>
   );
 }
 
