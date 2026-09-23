@@ -139,12 +139,13 @@ export async function fetchHealth() {
 export async function fetchSystemMeta() {
   try {
     const response = await fetch(`${API_BASE_URL}/meta`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return await response.json();
   } catch {
     return {
       status: 'ACTIVE',
-      monitored_requests: 12486,
-      threats_detected: 256,
+      monitored_requests: 0,
+      threats_detected: 0,
       accuracy_rate: 92.73,
       avg_latency_ms: 12.5
     };
@@ -157,9 +158,10 @@ export async function fetchSystemMeta() {
 export async function fetchModelStatus() {
   try {
     const response = await fetch(`${API_BASE_URL}/guardrail/model-status`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return await response.json();
   } catch {
-    return { prompt_injection_model: 'READY', model_type: 'Linear SVM', vectorizer: 'READY' };
+    return { prompt_injection_model: 'UNAVAILABLE', model_type: 'Linear SVM', vectorizer: 'UNAVAILABLE' };
   }
 }
 
@@ -177,6 +179,7 @@ export async function sendChatMessage(agentId, message, conversationId = null) {
     })
   });
   if (!response.ok) {
+    if (response.status === 401) clearAuthSession();
     const err = await response.json().catch(() => ({}));
     throw new Error(err.detail || 'Chat request failed');
   }
@@ -192,7 +195,10 @@ export async function fetchConversations(agentId = null) {
       ? `${API_BASE_URL}/conversations?agent_id=${encodeURIComponent(agentId)}`
       : `${API_BASE_URL}/conversations`;
     const response = await fetch(url, { headers: getAuthHeaders() });
-    if (!response.ok) return [];
+    if (!response.ok) {
+      if (response.status === 401) clearAuthSession();
+      return [];
+    }
     return await response.json();
   } catch {
     return [];
@@ -206,7 +212,11 @@ export async function fetchConversationDetail(conversationId) {
   const response = await fetch(`${API_BASE_URL}/conversations/${encodeURIComponent(conversationId)}`, {
     headers: getAuthHeaders()
   });
-  if (!response.ok) throw new Error('Failed to load conversation');
+  if (!response.ok) {
+    if (response.status === 401) clearAuthSession();
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to load conversation');
+  }
   return await response.json();
 }
 
@@ -218,6 +228,10 @@ export async function deleteConversation(conversationId) {
     method: 'DELETE',
     headers: getAuthHeaders()
   });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to delete conversation');
+  }
   return await response.json();
 }
 
@@ -233,6 +247,10 @@ export async function checkGuardrail(agentId, promptText) {
       request: promptText
     })
   });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || 'Guardrail check failed');
+  }
   return await response.json();
 }
 
@@ -248,6 +266,10 @@ export async function checkOutputGuardrail(agentId, responseText) {
       response_text: responseText
     })
   });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || 'Output guardrail check failed');
+  }
   return await response.json();
 }
 
@@ -265,6 +287,10 @@ export async function scanExternalWebsite(agentId, url, content, resourceType = 
       resource_type: resourceType
     })
   });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || 'Website scan failed');
+  }
   return await response.json();
 }
 
@@ -272,37 +298,16 @@ export async function scanExternalWebsite(agentId, url, content, resourceType = 
  * Fetch Executive Dashboard Overview Stats
  */
 export async function fetchDashboardStats() {
-  try {
-    const response = await fetch(`${API_BASE_URL}/dashboard/stats`, {
-      headers: getAuthHeaders()
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return await response.json();
-  } catch {
-    return {
-      protected_agents_count: 7,
-      websites_scanned_count: 142,
-      safe_requests_count: 12239,
-      blocked_threats_count: 247,
-      threat_percentage: 1.98,
-      guardrail_status: {
-        status: 'ACTIVE',
-        action_mode: 'BLOCK',
-        uptime_pct: 99.98,
-        avg_latency_ms: 11.8,
-        active_modules: [
-          { name: 'Webpage / HTML DOM Scanner', enabled: true },
-          { name: '3rd-Party API Scanner', enabled: true },
-          { name: 'Tool Output Scanner', enabled: true },
-          { name: 'Prompt Injection ML Detector', enabled: true },
-          { name: 'Data Exfiltration & Leakage Guard', enabled: true }
-        ]
-      },
-      recent_activity: [],
-      recent_threats: [],
-      activity_chart: []
-    };
+  const response = await fetch(`${API_BASE_URL}/dashboard/stats`, {
+    headers: getAuthHeaders()
+  });
+  if (!response.ok) {
+    if (response.status === 401) {
+      clearAuthSession();
+    }
+    throw new Error(`Failed to fetch dashboard stats (HTTP ${response.status})`);
   }
+  return await response.json();
 }
 
 /**
@@ -313,6 +318,10 @@ export async function fetchDashboardEvents(limit = 20) {
     const response = await fetch(`${API_BASE_URL}/dashboard/events?limit=${limit}`, {
       headers: getAuthHeaders()
     });
+    if (!response.ok) {
+      if (response.status === 401) clearAuthSession();
+      return [];
+    }
     return await response.json();
   } catch {
     return [];
@@ -323,23 +332,14 @@ export async function fetchDashboardEvents(limit = 20) {
  * Fetch Protected Agents
  */
 export async function fetchAgents() {
-  try {
-    const response = await fetch(`${API_BASE_URL}/agents`, {
-      headers: getAuthHeaders()
-    });
-    if (!response.ok) throw new Error('Failed to fetch agents');
-    return await response.json();
-  } catch {
-    return [
-      { id: 'general-assistant', slug: 'general-assistant', name: 'General AI Assistant', icon: '🤖', category: 'General', status: 'Protected', description: 'General questions, reasoning, and comprehensive conversational assistance.' },
-      { id: 'coding-agent', slug: 'coding-agent', name: 'Coding Assistant', icon: '💻', category: 'Development', status: 'Protected', description: 'Programming, code generation, debugging, refactoring, and security reviews.' },
-      { id: 'travel-agent', slug: 'travel-agent', name: 'Travel Assistant', icon: '✈️', category: 'Travel', status: 'Protected', description: 'Travel planning, itinerary design, flight search, and destination queries.' },
-      { id: 'finance-agent', slug: 'finance-agent', name: 'Finance Assistant', icon: '📈', category: 'Finance', status: 'Protected', description: 'General financial information, market research, and investment analytics.' },
-      { id: 'research-agent', slug: 'research-agent', name: 'Research Assistant', icon: '📚', category: 'Research', status: 'Protected', description: 'Scientific inquiries, document synthesis, factual QA, and literature review.' },
-      { id: 'banking-agent', slug: 'banking-agent', name: 'Banking Agent', icon: '🏦', category: 'Banking', status: 'Protected', description: 'Transactional workflows, account balance inquiries, and financial ops.' },
-      { id: 'shopping-agent', slug: 'shopping-agent', name: 'Shopping Agent', icon: '🛒', category: 'E-Commerce', status: 'Protected', description: 'Assists with product discovery, cart operations, and price comparisons.' }
-    ];
+  const response = await fetch(`${API_BASE_URL}/agents`, {
+    headers: getAuthHeaders()
+  });
+  if (!response.ok) {
+    if (response.status === 401) clearAuthSession();
+    throw new Error(`Failed to fetch agents (HTTP ${response.status})`);
   }
+  return await response.json();
 }
 
 /**
@@ -349,7 +349,10 @@ export async function fetchAgentById(agentId) {
   const response = await fetch(`${API_BASE_URL}/agents/${encodeURIComponent(agentId)}`, {
     headers: getAuthHeaders()
   });
-  if (!response.ok) throw new Error('Agent not found');
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || 'Agent not found or unavailable');
+  }
   return await response.json();
 }
 
@@ -475,6 +478,10 @@ export async function updateConfig(payload) {
     headers: getAuthHeaders(),
     body: JSON.stringify(payload)
   });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to update configuration');
+  }
   return await response.json();
 }
 

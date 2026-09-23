@@ -38,9 +38,9 @@ def test_meta_endpoint():
     assert data["accuracy_rate"] == 92.73
     assert "thresholds" in data
 
-def test_analytics_endpoint():
+def test_analytics_endpoint(normal_user_headers):
     """Verify analytics endpoint returns deployed model metrics and 6-model comparison."""
-    response = client.get("/api/v1/analytics")
+    response = client.get("/api/v1/analytics", headers=normal_user_headers)
     assert response.status_code == 200
     data = response.json()
     assert "deployed_model" in data

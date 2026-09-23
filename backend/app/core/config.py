@@ -13,13 +13,25 @@ class Settings(BaseSettings):
     RISK_THRESHOLD_LOW: float = 0.40
     RISK_THRESHOLD_HIGH: float = 0.70
     
+    # Operation & Demonstration Modes
+    DEMO_MODE: bool = False
+    SEED_DEMO_DATA: bool = False
+    
+    # AI Provider Integration
+    AI_PROVIDER: str = "demo"  # "demo", "openai", "gemini"
+    OPENAI_API_KEY: str = ""
+    OPENAI_MODEL: str = "gpt-4o-mini"
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-1.5-flash"
+    
     # CORS
     BACKEND_CORS_ORIGINS: List[str] = [
         "http://localhost:3000",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:4173",
-        "*"
+        "http://127.0.0.1:8000",
+        "http://localhost:8000"
     ]
     
     # Database

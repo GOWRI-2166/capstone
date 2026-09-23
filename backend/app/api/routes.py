@@ -10,7 +10,7 @@ from app.api.deps import get_guardrail_service
 from app.services.guardrail_service import GuardrailService
 from app.services.output_guardrail import output_guardrail, OutputGuardrailResult
 from app.services.chat_service import chat_service
-from app.api.auth import get_current_user, get_optional_current_user
+from app.api.auth import get_current_user, get_optional_current_user, require_admin
 from app.schemas.request import GuardrailCheckRequest, WebsiteScanRequest
 from app.schemas.response import (
     GuardrailCheckResponse,
@@ -26,6 +26,14 @@ from app.benchmarks.agent_dojo_adapter import AgentDojoBenchmarkAdapter
 from app.ml.model_manager import model_manager
 
 router = APIRouter()
+
+def is_admin_user(user: Optional[User]) -> bool:
+    """Check if the user has administrative privileges."""
+    if not user:
+        return False
+    return str(user.role).strip().lower() in [
+        "security administrator", "admin", "security_admin", "security admin", "administrator"
+    ]
 
 # ----------------------------------------------------
 # 1. System & Health Endpoints
@@ -171,7 +179,7 @@ class ChatMessageRequest(BaseModel):
 )
 def send_chat_message(
     payload: ChatMessageRequest,
-    user: User = Depends(get_optional_current_user),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -207,10 +215,10 @@ def send_chat_message(
 def list_user_conversations(
     agent_id: Optional[str] = Query(None),
     limit: int = Query(30, ge=1, le=100),
-    user: User = Depends(get_optional_current_user),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """List previous conversation sessions for the authenticated user."""
+    """List previous conversation sessions strictly for the authenticated user."""
     query = db.query(Conversation).filter(Conversation.user_id == user.id)
     if agent_id and agent_id != "all":
         query = query.filter(Conversation.agent_id == agent_id)
@@ -245,10 +253,10 @@ def list_user_conversations(
 )
 def get_conversation_detail(
     conversation_id: str,
-    user: User = Depends(get_optional_current_user),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Retrieve full message timeline with attached guardrail risk metadata."""
+    """Retrieve full message timeline with attached guardrail risk metadata for authenticated user."""
     conv = db.query(Conversation).filter(
         Conversation.id == conversation_id,
         Conversation.user_id == user.id
@@ -294,10 +302,10 @@ def get_conversation_detail(
 )
 def delete_conversation(
     conversation_id: str,
-    user: User = Depends(get_optional_current_user),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Delete a user conversation and associated messages."""
+    """Delete an owned user conversation and associated messages."""
     conv = db.query(Conversation).filter(
         Conversation.id == conversation_id,
         Conversation.user_id == user.id
@@ -319,8 +327,8 @@ def delete_conversation(
     tags=["Agents"]
 )
 def list_protected_agents(db: Session = Depends(get_db)):
-    """List all registered agents and their runtime security statistics."""
-    agents = db.query(Agent).filter(Agent.status != "Disconnected").all()
+    """List all registered, enabled agents and their runtime security statistics (never exposes API keys)."""
+    agents = db.query(Agent).filter(Agent.status != "Disconnected", Agent.enabled != False).all()
     return [
         {
             "id": a.id,
@@ -333,7 +341,6 @@ def list_protected_agents(db: Session = Depends(get_db)):
             "requests": a.request_count,
             "threats": a.threat_count,
             "avg_latency": f"{a.avg_latency_ms:.1f}ms",
-            "api_key": getattr(a, "api_key", None) or f"ag_live_{a.id.replace('-', '_')}",
             "protection_mode": getattr(a, "protection_mode", "AUTOMATIC_BLOCK") or "AUTOMATIC_BLOCK",
             "description": a.description,
             "last_activity": a.last_activity.strftime("%Y-%m-%d %H:%M UTC") if a.last_activity else "Active"
@@ -349,8 +356,8 @@ def list_protected_agents(db: Session = Depends(get_db)):
 def get_agent_detail(agent_id: str, db: Session = Depends(get_db)):
     """Retrieve details for a single protected agent."""
     agent = db.query(Agent).filter((Agent.id == agent_id) | (Agent.slug == agent_id)).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    if not agent or agent.status == "Disconnected" or agent.enabled is False:
+        raise HTTPException(status_code=404, detail="This AI agent is currently unavailable or disabled.")
     return {
         "id": agent.id,
         "slug": agent.slug or agent.id,
@@ -362,7 +369,6 @@ def get_agent_detail(agent_id: str, db: Session = Depends(get_db)):
         "requests": agent.request_count,
         "threats": agent.threat_count,
         "avg_latency": f"{agent.avg_latency_ms:.1f}ms",
-        "api_key": getattr(agent, "api_key", None) or f"ag_live_{agent.id.replace('-', '_')}",
         "protection_mode": getattr(agent, "protection_mode", "AUTOMATIC_BLOCK") or "AUTOMATIC_BLOCK",
         "description": agent.description,
         "last_activity": agent.last_activity.strftime("%Y-%m-%d %H:%M UTC") if agent.last_activity else "Active"
@@ -380,8 +386,12 @@ class RegisterAgentRequest(BaseModel):
     summary="Register New AI Agent",
     tags=["Agents"]
 )
-def register_agent(payload: RegisterAgentRequest, db: Session = Depends(get_db)):
-    """Register a new LLM agent with the universal guardrail."""
+def register_agent(
+    payload: RegisterAgentRequest,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """Register a new LLM agent with the universal guardrail (Admin Only)."""
     import uuid
     existing = db.query(Agent).filter(Agent.id == payload.id).first()
     if existing:
@@ -405,18 +415,24 @@ def register_agent(payload: RegisterAgentRequest, db: Session = Depends(get_db))
     )
     db.add(new_agent)
     db.commit()
-    return {"status": "registered", "agent_id": new_agent.id, "api_key": gen_key}
+    return {"status": "registered", "agent_id": new_agent.id}
 
 @router.delete(
     "/agents/{agent_id}",
     summary="Disconnect AI Agent",
     tags=["Agents"]
 )
-def disconnect_agent(agent_id: str, db: Session = Depends(get_db)):
+def disconnect_agent(
+    agent_id: str,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """Disconnect and disable an AI agent (Admin Only)."""
     agent = db.query(Agent).filter(Agent.id == agent_id).first()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     agent.status = "Disconnected"
+    agent.enabled = False
     db.commit()
     return {"status": "disconnected", "agent_id": agent_id}
 
@@ -429,24 +445,33 @@ def disconnect_agent(agent_id: str, db: Session = Depends(get_db)):
     summary="Executive Dashboard Overview Metrics & Telemetry",
     tags=["Dashboard"]
 )
-def get_dashboard_stats(db: Session = Depends(get_db)):
-    """Aggregates all core operational metrics for the primary dashboard view."""
-    agents_count = db.query(Agent).filter(Agent.status != "Disconnected").count()
-    all_logs = db.query(GuardrailAuditLog).order_by(GuardrailAuditLog.created_at.desc()).all()
+def get_dashboard_stats(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Aggregates all core operational metrics for the primary dashboard view (role-aware)."""
+    agents_count = db.query(Agent).filter(Agent.status != "Disconnected", Agent.enabled != False).count()
+    
+    user_admin = is_admin_user(user)
+    if user_admin:
+        all_logs = db.query(GuardrailAuditLog).order_by(GuardrailAuditLog.created_at.desc()).all()
+        alerts = db.query(SecurityAlert).order_by(SecurityAlert.created_at.desc()).limit(5).all()
+    else:
+        all_logs = db.query(GuardrailAuditLog).filter(GuardrailAuditLog.user_id == user.id).order_by(GuardrailAuditLog.created_at.desc()).all()
+        user_log_ids = [l.id for l in all_logs]
+        alerts = db.query(SecurityAlert).filter(SecurityAlert.request_id.in_(user_log_ids)).order_by(SecurityAlert.created_at.desc()).limit(5).all() if user_log_ids else []
+
     total_reqs = len(all_logs)
     safe_reqs = sum(1 for l in all_logs if l.decision == "ALLOW")
     warn_reqs = sum(1 for l in all_logs if l.decision == "WARN")
     blocked_threats = sum(1 for l in all_logs if l.decision == "BLOCK")
     web_scanned = sum(1 for l in all_logs if l.website_url is not None)
 
-    if web_scanned == 0 and total_reqs > 0:
-        web_scanned = total_reqs
-
     cfg_rows = db.query(SystemConfigModel).all()
     cfg_dict = {c.key: c.value for c in cfg_rows}
     action_mode = cfg_dict.get("ACTION_MODE", "BLOCK").upper()
     avg_latency = round(sum(l.processing_time_ms for l in all_logs) / max(1, total_reqs), 1) if all_logs else 12.5
-    avg_risk = round(sum(l.risk_score for l in all_logs) / max(1, total_reqs), 3) if all_logs else 0.12
+    avg_risk = round(sum(l.risk_score for l in all_logs) / max(1, total_reqs), 3) if all_logs else 0.0
 
     recent_activity = []
     for l in all_logs[:8]:
@@ -465,7 +490,6 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
         })
 
     recent_threats = []
-    alerts = db.query(SecurityAlert).order_by(SecurityAlert.created_at.desc()).limit(5).all()
     for a in alerts:
         recent_threats.append({
             "id": a.id,
@@ -482,13 +506,13 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
         })
 
     chart_points = [
-        {"time": "12:00", "safe": max(1, int(safe_reqs * 0.12)), "blocked": max(0, int(blocked_threats * 0.10))},
-        {"time": "14:00", "safe": max(2, int(safe_reqs * 0.18)), "blocked": max(0, int(blocked_threats * 0.15))},
-        {"time": "16:00", "safe": max(1, int(safe_reqs * 0.14)), "blocked": max(0, int(blocked_threats * 0.20))},
-        {"time": "18:00", "safe": max(3, int(safe_reqs * 0.22)), "blocked": max(1, int(blocked_threats * 0.25))},
-        {"time": "20:00", "safe": max(2, int(safe_reqs * 0.16)), "blocked": max(0, int(blocked_threats * 0.15))},
-        {"time": "21:00", "safe": max(1, int(safe_reqs * 0.10)), "blocked": max(0, int(blocked_threats * 0.10))},
-        {"time": "Now", "safe": max(1, int(safe_reqs * 0.08)), "blocked": max(0, int(blocked_threats * 0.05))}
+        {"time": "12:00", "safe": max(0, int(safe_reqs * 0.12)), "blocked": max(0, int(blocked_threats * 0.10))},
+        {"time": "14:00", "safe": max(0, int(safe_reqs * 0.18)), "blocked": max(0, int(blocked_threats * 0.15))},
+        {"time": "16:00", "safe": max(0, int(safe_reqs * 0.14)), "blocked": max(0, int(blocked_threats * 0.20))},
+        {"time": "18:00", "safe": max(0, int(safe_reqs * 0.22)), "blocked": max(0, int(blocked_threats * 0.25))},
+        {"time": "20:00", "safe": max(0, int(safe_reqs * 0.16)), "blocked": max(0, int(blocked_threats * 0.15))},
+        {"time": "21:00", "safe": max(0, int(safe_reqs * 0.10)), "blocked": max(0, int(blocked_threats * 0.10))},
+        {"time": "Now", "safe": max(0, int(safe_reqs * 0.08)), "blocked": max(0, int(blocked_threats * 0.05))}
     ]
 
     return {
@@ -499,7 +523,7 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
         "warn_requests_count": warn_reqs,
         "blocked_threats_count": blocked_threats,
         "avg_risk_score": avg_risk,
-        "threat_percentage": round((blocked_threats / max(1, total_reqs)) * 100, 1),
+        "threat_percentage": round((blocked_threats / max(1, total_reqs)) * 100, 1) if total_reqs else 0.0,
         "guardrail_status": {
             "status": "ACTIVE",
             "action_mode": action_mode,
@@ -525,10 +549,14 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
 )
 def get_dashboard_events(
     limit: int = Query(20, ge=1, le=100),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Fetch recent security events with full telemetry."""
-    logs = db.query(GuardrailAuditLog).order_by(GuardrailAuditLog.created_at.desc()).limit(limit).all()
+    """Fetch recent security events with full telemetry (role-isolated)."""
+    query = db.query(GuardrailAuditLog)
+    if not is_admin_user(user):
+        query = query.filter(GuardrailAuditLog.user_id == user.id)
+    logs = query.order_by(GuardrailAuditLog.created_at.desc()).limit(limit).all()
     return [
         {
             "id": l.id,
@@ -555,9 +583,15 @@ def get_dashboard_events(
     summary="Get Risk Level Distribution",
     tags=["Dashboard"]
 )
-def get_risk_distribution(db: Session = Depends(get_db)):
+def get_risk_distribution(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Fetch risk level distribution percentage breakdown."""
-    all_logs = db.query(GuardrailAuditLog).all()
+    query = db.query(GuardrailAuditLog)
+    if not is_admin_user(user):
+        query = query.filter(GuardrailAuditLog.user_id == user.id)
+    all_logs = query.all()
     total = len(all_logs)
     allow_count = sum(1 for l in all_logs if l.decision == "ALLOW")
     warn_count = sum(1 for l in all_logs if l.decision == "WARN")
@@ -580,9 +614,14 @@ def get_risk_distribution(db: Session = Depends(get_db)):
 )
 def get_security_alerts(
     limit: int = Query(20, ge=1, le=100),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    alerts = db.query(SecurityAlert).order_by(SecurityAlert.created_at.desc()).limit(limit).all()
+    query = db.query(SecurityAlert)
+    if not is_admin_user(user):
+        user_log_ids = [l[0] for l in db.query(GuardrailAuditLog.id).filter(GuardrailAuditLog.user_id == user.id).all()]
+        query = query.filter(SecurityAlert.request_id.in_(user_log_ids)) if user_log_ids else query.filter(False)
+    alerts = query.order_by(SecurityAlert.created_at.desc()).limit(limit).all()
     return [
         {
             "id": a.id,
@@ -615,8 +654,16 @@ def get_security_alerts(
     summary="Get Detailed Security Alert",
     tags=["Alerts"]
 )
-def get_alert_detail(alert_id: str, db: Session = Depends(get_db)):
-    alert = db.query(SecurityAlert).filter((SecurityAlert.id == alert_id) | (SecurityAlert.request_id == alert_id)).first()
+def get_alert_detail(
+    alert_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    query = db.query(SecurityAlert).filter((SecurityAlert.id == alert_id) | (SecurityAlert.request_id == alert_id))
+    if not is_admin_user(user):
+        user_log_ids = [l[0] for l in db.query(GuardrailAuditLog.id).filter(GuardrailAuditLog.user_id == user.id).all()]
+        query = query.filter(SecurityAlert.request_id.in_(user_log_ids))
+    alert = query.first()
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
     return {
@@ -653,9 +700,14 @@ def list_threats(
     severity: Optional[str] = Query(None),
     agent_id: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=100),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     query = db.query(SecurityAlert)
+    if not is_admin_user(user):
+        user_log_ids = [l[0] for l in db.query(GuardrailAuditLog.id).filter(GuardrailAuditLog.user_id == user.id).all()]
+        query = query.filter(SecurityAlert.request_id.in_(user_log_ids)) if user_log_ids else query.filter(False)
+
     if severity and severity != "all":
         query = query.filter(SecurityAlert.severity == severity.upper())
     if agent_id and agent_id != "all":
@@ -692,8 +744,16 @@ def list_threats(
     summary="Get Detailed Threat Forensic Record",
     tags=["Threats"]
 )
-def get_threat_detail(threat_id: str, db: Session = Depends(get_db)):
-    alert = db.query(SecurityAlert).filter((SecurityAlert.id == threat_id) | (SecurityAlert.request_id == threat_id)).first()
+def get_threat_detail(
+    threat_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    query = db.query(SecurityAlert).filter((SecurityAlert.id == threat_id) | (SecurityAlert.request_id == threat_id))
+    if not is_admin_user(user):
+        user_log_ids = [l[0] for l in db.query(GuardrailAuditLog.id).filter(GuardrailAuditLog.user_id == user.id).all()]
+        query = query.filter(SecurityAlert.request_id.in_(user_log_ids))
+    alert = query.first()
     if not alert:
         raise HTTPException(status_code=404, detail="Threat record not found")
     return {
@@ -729,9 +789,13 @@ def get_website_activity(
     search: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     query = db.query(GuardrailAuditLog)
+    if not is_admin_user(user):
+        query = query.filter(GuardrailAuditLog.user_id == user.id)
+
     if agent_id and agent_id != "all":
         query = query.filter(GuardrailAuditLog.agent_id == agent_id)
     if status and status != "all":
@@ -791,9 +855,13 @@ def get_audit_history(
     search: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     query = db.query(GuardrailAuditLog)
+    if not is_admin_user(user):
+        query = query.filter(GuardrailAuditLog.user_id == user.id)
+
     if decision and decision.upper() != "ALL":
         query = query.filter(GuardrailAuditLog.decision == decision.upper())
     if agent_id and agent_id != "all":
@@ -836,7 +904,10 @@ def get_audit_history(
     summary="Security Analytics Aggregations",
     tags=["Analytics"]
 )
-def get_security_analytics(db: Session = Depends(get_db)):
+def get_security_analytics(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     real_logs = db.query(GuardrailAuditLog).all()
     total_logs = len(real_logs)
     allow_count = sum(1 for l in real_logs if l.decision == "ALLOW")
@@ -1002,9 +1073,13 @@ def run_benchmark():
     summary="Get Active Guardrail Policies & Thresholds",
     tags=["Configuration"]
 )
-def get_guardrail_config(db: Session = Depends(get_db)):
+def get_guardrail_config(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     configs = db.query(SystemConfigModel).all()
     config_dict = {c.key: c.value for c in configs}
+    user_admin = is_admin_user(user)
     return {
         "thresholds": {
             "low": float(config_dict.get("RISK_THRESHOLD_LOW", settings.RISK_THRESHOLD_LOW)),
@@ -1021,7 +1096,7 @@ def get_guardrail_config(db: Session = Depends(get_db)):
             "output_validation": config_dict.get("MODULE_OUTPUT_VALIDATION", "true").lower() == "true"
         },
         "action_mode": config_dict.get("ACTION_MODE", "BLOCK").upper(),
-        "api_key": config_dict.get("MASTER_API_KEY", "ag_live_sec_master_984120"),
+        "api_key": config_dict.get("MASTER_API_KEY", "ag_live_sec_master_984120") if user_admin else "ag_live_****_masked",
         "webhook_url": config_dict.get("WEBHOOK_ALERT_URL", "https://hooks.slack.com/services/SEC/ALERTS/guardrail")
     }
 
@@ -1038,7 +1113,11 @@ class UpdateConfigRequest(BaseModel):
     summary="Update Guardrail Policies & Thresholds",
     tags=["Configuration"]
 )
-def update_guardrail_config(payload: UpdateConfigRequest, db: Session = Depends(get_db)):
+def update_guardrail_config(
+    payload: UpdateConfigRequest,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
     if payload.threshold_low is not None:
         settings.RISK_THRESHOLD_LOW = payload.threshold_low
         cfg = db.query(SystemConfigModel).filter(SystemConfigModel.key == "RISK_THRESHOLD_LOW").first()

@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.database.session import get_db
 from app.models.log import User, AuditLog
 from app.core.security import verify_password, get_password_hash, create_access_token, decode_access_token
+from app.core.config import settings
 from fastapi.security import OAuth2PasswordBearer
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -16,6 +17,7 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=6)
     confirm_password: Optional[str] = None
+    role: Optional[str] = "USER"
 
 class LoginRequest(BaseModel):
     email: EmailStr
@@ -33,6 +35,10 @@ class PasswordChangeRequest(BaseModel):
 def get_current_user(token: Optional[str] = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
     """Dependency to retrieve authenticated user from JWT token."""
     if not token:
+        if settings.DEMO_MODE:
+            admin = db.query(User).filter(User.email == "security@guardrail.ai").first()
+            if admin:
+                return admin
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required. Please provide Bearer JWT token.",
@@ -50,44 +56,45 @@ def get_current_user(token: Optional[str] = Depends(oauth2_scheme), db: Session 
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User account not found",
+            detail="User account not found or deactivated",
             headers={"WWW-Authenticate": "Bearer"},
         )
     return user
 
+def require_admin(user: User = Depends(get_current_user)) -> User:
+    """Dependency to ensure the current authenticated user has administrative privileges."""
+    admin_roles = ["Security Administrator", "Admin", "admin", "SECURITY_ADMIN", "ADMIN", "Security Admin"]
+    if user.role not in admin_roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrative privileges required to perform this action."
+        )
+    return user
+
 def get_optional_current_user(token: Optional[str] = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
-    """Dependency that returns authenticated user or falls back to default admin user."""
+    """Dependency that returns authenticated user or falls back to demo admin user only if DEMO_MODE is active."""
     if token:
         payload = decode_access_token(token)
         if payload and "sub" in payload:
             user = db.query(User).filter(User.id == payload["sub"]).first()
             if user:
                 return user
-    # Fallback to seeded admin user
-    admin = db.query(User).filter(User.email == "security@guardrail.ai").first()
-    if admin:
-        return admin
-    # Or first user
-    first_user = db.query(User).first()
-    if first_user:
-        return first_user
-    # Create fallback user if DB empty
-    new_user = User(
-        id="usr-default-01",
-        name="Security Administrator",
-        email="security@guardrail.ai",
-        password_hash=get_password_hash("Admin@12345"),
-        role="Security Administrator",
-        is_active=True
+    if settings.DEMO_MODE:
+        admin = db.query(User).filter(User.email == "security@guardrail.ai").first()
+        if admin:
+            return admin
+        first_user = db.query(User).first()
+        if first_user:
+            return first_user
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication required. Please provide Bearer JWT token.",
+        headers={"WWW-Authenticate": "Bearer"},
     )
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    return new_user
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 def register_user(payload: RegisterRequest, db: Session = Depends(get_db)):
-    """Register a new user administrator."""
+    """Register a new user."""
     display_name = (payload.full_name or payload.name or "").strip()
     if not display_name:
         raise HTTPException(
@@ -108,11 +115,15 @@ def register_user(payload: RegisterRequest, db: Session = Depends(get_db)):
             detail="An account with this email address already exists"
         )
 
+    assigned_role = "USER"
+    if payload.role and payload.role.strip() in ["USER", "User", "Admin", "Security Administrator", "SECURITY_ADMIN"]:
+        assigned_role = payload.role.strip()
+
     new_user = User(
         name=display_name,
         email=payload.email.lower().strip(),
         password_hash=get_password_hash(payload.password),
-        role="Security Administrator",
+        role=assigned_role,
         is_active=True
     )
     db.add(new_user)
@@ -120,10 +131,10 @@ def register_user(payload: RegisterRequest, db: Session = Depends(get_db)):
     db.refresh(new_user)
 
     # Log audit event
-    db.add(AuditLog(user_id=new_user.id, event_type="USER_REGISTERED", description=f"User registered: {new_user.email}"))
+    db.add(AuditLog(user_id=new_user.id, event_type="USER_REGISTERED", description=f"User registered: {new_user.email} ({assigned_role})"))
     db.commit()
 
-    token = create_access_token({"sub": new_user.id, "email": new_user.email, "name": new_user.name})
+    token = create_access_token({"sub": new_user.id, "email": new_user.email, "name": new_user.name, "role": new_user.role})
     return {
         "success": True,
         "access_token": token,

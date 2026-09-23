@@ -42,21 +42,21 @@ export function DashboardPage({
   const [timeRange, setTimeRange] = useState('24h');
   const [selectedEventModal, setSelectedEventModal] = useState(null);
 
-  const safeCount = stats?.safe_requests_count ?? 12239;
-  const blockedCount = stats?.blocked_threats_count ?? 193;
-  const warningsCount = stats?.warnings_count ?? 54;
+  const safeCount = stats?.safe_requests_count ?? 0;
+  const blockedCount = stats?.blocked_threats_count ?? 0;
+  const warningsCount = stats?.warnings_count ?? 0;
   const threatsDetected = stats?.threats_detected ?? (blockedCount + warningsCount);
-  const totalRequests = stats?.monitored_requests ?? (safeCount + threatsDetected);
-  const agentsCount = stats?.protected_agents_count ?? 7;
-  const websitesScanned = stats?.websites_scanned_count ?? 127;
-  const accuracyRate = stats?.accuracy_rate ?? 94.6;
+  const totalRequests = stats?.total_requests ?? stats?.monitored_requests ?? (safeCount + threatsDetected);
+  const agentsCount = stats?.protected_agents_count ?? 0;
+  const websitesScanned = stats?.websites_scanned_count ?? 0;
+  const accuracyRate = stats?.accuracy_rate ?? 92.73;
   const recentActivity = stats?.recent_activity || [];
   const guardrailStatus = stats?.guardrail_status || {};
 
   // Rates
-  const threatRate = totalRequests > 0 ? ((threatsDetected / totalRequests) * 100).toFixed(2) : '1.98';
-  const blockedRate = totalRequests > 0 ? ((blockedCount / totalRequests) * 100).toFixed(2) : '1.55';
-  const avgRiskScore = stats?.avg_risk_score ?? 14.8;
+  const threatRate = totalRequests > 0 ? ((threatsDetected / totalRequests) * 100).toFixed(2) : '0.00';
+  const blockedRate = totalRequests > 0 ? ((blockedCount / totalRequests) * 100).toFixed(2) : '0.00';
+  const avgRiskScore = stats?.avg_risk_score ?? 0;
 
   // Chart data
   const getChartData = () => {
